@@ -2,8 +2,11 @@ flask
 flask-socketio
 eventlet
 gunicorn
-opencv-python-headless
-mediapipe
+
+opencv-python
+
+mediapipe==0.10.14
+
 numpy
 torch
 torchvision
