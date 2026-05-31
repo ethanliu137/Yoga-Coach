@@ -1,0 +1,10 @@
+flask
+flask-socketio
+eventlet
+gunicorn
+opencv-python-headless
+mediapipe
+numpy
+torch
+torchvision
+pillow

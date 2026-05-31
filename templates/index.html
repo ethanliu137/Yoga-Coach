@@ -1,0 +1,196 @@
+          <h2>示範姿勢</h2>
+          <img class="demo-img" id="poseDemo" src="/static/poses/warrior.jpg" alt="Warrior 示範姿勢">
+        </section>
+
+        <section class="panel">
+          <h2>本次分數</h2>
+          <div class="score-box">
+            <div class="score" id="score">--</div>
+            <div class="score-label" id="scorePose">Warrior</div>
+            <div class="bar"><span id="scoreBar"></span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>支援姿勢</h2>
+          <div class="chips" id="poseChips"></div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <canvas id="canvas"></canvas>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const POSES = [
+      { key: "warrior2", name: "Warrior", image: "/static/poses/warrior.jpg" },
+      { key: "downdog", name: "Downdog", image: "/static/poses/downdog.jpg" },
+      { key: "tree", name: "Tree", image: "/static/poses/tree.jpg" },
+      { key: "goddess", name: "Goddess", image: "/static/poses/goddess.jpg" },
+      { key: "plank", name: "Plank", image: "/static/poses/plank.jpg" },
+    ];
+
+    const HOLD_SECONDS = 10;
+    const CONF_THRESHOLD = 0.6;
+    const ENCOURAGEMENTS = ["加油，保持住", "很好，身體穩住", "呼吸放慢", "快完成了"];
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const output = document.getElementById("output");
+    const emptyState = document.getElementById("emptyState");
+    const statusText = document.getElementById("statusText");
+    const statusDot = document.getElementById("statusDot");
+    const btn = document.getElementById("btn");
+    const ctx = canvas.getContext("2d");
+    const countdownRing = document.getElementById("countdownRing");
+    const encourage = document.getElementById("encourage");
+    const score = document.getElementById("score");
+    const scorePose = document.getElementById("scorePose");
+    const scoreBar = document.getElementById("scoreBar");
+    const targetPose = document.getElementById("targetPose");
+    const liveReadout = document.getElementById("liveReadout");
+    const poseChips = document.getElementById("poseChips");
+    const poseDemo = document.getElementById("poseDemo");
+    const socket = io();
+
+    let streaming = false;
+    let interval = null;
+    let selectedPose = POSES[0];
+    let holdStartedAt = null;
+    let samples = [];
+    let completed = false;
+
+    function renderPoseChips() {
+      poseChips.innerHTML = "";
+      POSES.forEach((pose) => {
+        const chip = document.createElement("button");
+        chip.className = "chip" + (pose.key === selectedPose.key ? " active" : "");
+        chip.textContent = pose.name;
+        chip.onclick = () => {
+          selectedPose = pose;
+          targetPose.textContent = pose.name;
+          scorePose.textContent = pose.name;
+          poseDemo.src = pose.image;
+          poseDemo.alt = `${pose.name} 示範姿勢`;
+          resetSession(false);
+          renderPoseChips();
+        };
+        poseChips.appendChild(chip);
+      });
+    }
+
+    function setStatus(text, mode = "waiting") {
+      statusText.textContent = text;
+      statusDot.className = "dot";
+      if (mode === "ready") statusDot.classList.add("ready");
+      if (mode === "warn") statusDot.classList.add("warn");
+    }
+
+    function resetSession(clearScore = true) {
+      holdStartedAt = null;
+      samples = [];
+      completed = false;
+      countdownRing.classList.remove("active");
+      countdownRing.textContent = HOLD_SECONDS;
+      countdownRing.style.setProperty("--progress", "0deg");
+      encourage.textContent = "";
+      if (clearScore) {
+        score.textContent = "--";
+        scoreBar.style.width = "0%";
+      }
+      setStatus(streaming ? "尋找指定姿勢中..." : "尚未開始");
+      liveReadout.textContent = `偵測到 ${selectedPose.name} 後會自動倒數 ${HOLD_SECONDS} 秒`;
+    }
+
+    socket.on("connect", () => {
+      setStatus("伺服器已連線", "ready");
+    });
+
+    socket.on("result_frame", (data) => {
+      output.src = "data:image/jpeg;base64," + data.image;
+      emptyState.style.display = "none";
+
+      if (!streaming || completed) return;
+
+      const label = data.label;
+      const conf = Number(data.conf || 0);
+      const displayName = data.display_name || label || "未偵測";
+      const isTarget = label === selectedPose.key && conf >= CONF_THRESHOLD;
+
+      liveReadout.textContent = label
+        ? `目前偵測：${displayName} ${(conf * 100).toFixed(1)}%`
+        : "目前沒有偵測到人體";
+
+      if (!holdStartedAt) {
+        if (!isTarget) {
+          setStatus(`請做出 ${selectedPose.name}`, "waiting");
+          return;
+        }
+        holdStartedAt = performance.now();
+        samples = [];
+        setStatus("維持姿勢中...", "ready");
+      }
+
+      const elapsed = (performance.now() - holdStartedAt) / 1000;
+      const remaining = Math.max(0, HOLD_SECONDS - elapsed);
+      samples.push(isTarget ? conf : 0);
+
+      countdownRing.classList.add("active");
+      countdownRing.textContent = Math.ceil(remaining);
+      countdownRing.style.setProperty("--progress", `${Math.min(360, (elapsed / HOLD_SECONDS) * 360)}deg`);
+      encourage.textContent = ENCOURAGEMENTS[Math.min(ENCOURAGEMENTS.length - 1, Math.floor(elapsed / 3))];
+      setStatus(isTarget ? "維持姿勢中..." : "姿勢跑掉了，快調回來", isTarget ? "ready" : "warn");
+
+      if (remaining <= 0) {
+        completed = true;
+        const average = samples.reduce((sum, value) => sum + value, 0) / Math.max(samples.length, 1);
+        const finalScore = Math.round(Math.max(0, Math.min(100, average * 100)));
+        score.textContent = finalScore;
+        scoreBar.style.width = `${finalScore}%`;
+        scorePose.textContent = selectedPose.name;
+        countdownRing.classList.remove("active");
+        encourage.textContent = "完成！";
+        setStatus("本組動作完成", "ready");
+        liveReadout.textContent = `${selectedPose.name} 整體平均分數：${finalScore}`;
+      }
+    });
+
+    async function startWebcam() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      await new Promise((resolve) => {
+        video.onloadedmetadata = resolve;
+      });
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
+    function sendFrame() {
+      if (!video.videoWidth || !video.videoHeight) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+      socket.emit("frame", { image: dataUrl.split(",")[1] });
+    }
+
+    async function toggleStream() {
+      if (!streaming) {
+        await startWebcam();
+        streaming = true;
+        resetSession();
+        interval = setInterval(sendFrame, 100);
+        btn.textContent = "停止辨識";
+        setStatus(`請做出 ${selectedPose.name}`, "waiting");
+      } else {
+        clearInterval(interval);
+        streaming = false;
+        btn.textContent = "開始辨識";
+        setStatus("已停止");
+      }
+    }
+
+    renderPoseChips();
+    resetSession();
+  </script>
+</body>
+</html>
